@@ -10,5 +10,5 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git remote add space https://huggingface.co/spaces/Nicknobu>/pubmed-summary-demo || true
-          git push -f space HEAD:main
+            git remote add space https://$HF_TOKEN@huggingface.co/spaces/Nicknobu/pubmed-summary-demo || true
+            git push -f space HEAD:main
