@@ -1,7 +1,7 @@
 ---
 title: PubMed Summary Demo
 emoji: 📄
-colorFrom: cyan
+colorFrom: blue
 colorTo: indigo
 sdk: streamlit
 sdk_version: "1.34.0"
