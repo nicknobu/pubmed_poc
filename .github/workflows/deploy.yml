@@ -1,14 +1,26 @@
-name: Deploy to HF Space
-on: [push]
+name: Deploy to Hugging Face Space
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Push to HF
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Configure Git
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Push to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-            git remote add space https://$HF_TOKEN@huggingface.co/spaces/nicknobu/pubmed-summary-demo || true
-            git push -f space HEAD:main
+          git push --force https://nicknobu:$HF_TOKEN@huggingface.co/spaces/nicknobu/pubmed-summary-demo main
