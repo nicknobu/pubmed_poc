@@ -1,0 +1,11 @@
+name: Debug HF Token Workflow
+on:
+  workflow_dispatch:
+jobs:
+  debug-hf-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug HF Token
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: echo "HF_TOKEN is set"

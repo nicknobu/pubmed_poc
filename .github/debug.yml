@@ -1,4 +1,0 @@
-- name: Debug HF Token
-  env:
-    HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  run: echo "HF_TOKEN is set"
