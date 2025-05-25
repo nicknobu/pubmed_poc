@@ -12,6 +12,67 @@ from urllib.parse import urljoin, urlparse
 import streamlit as st
 from services.summarize import summarize_pdf, summarize_text
 from dotenv import load_dotenv
+from pathlib import Path
+
+print("=== 詳細デバッグ開始 ===")
+
+# 1. 現在の作業ディレクトリ
+current_dir = os.getcwd()
+print(f"現在のディレクトリ: {current_dir}")
+
+# 2. .envファイルの存在確認
+env_path = Path('.env')
+env_absolute = env_path.resolve()
+print(f".envファイル存在: {env_path.exists()}")
+print(f".envファイル絶対パス: {env_absolute}")
+print(f".envファイル読み取り可能: {env_path.is_file() and os.access(env_path, os.R_OK)}")
+
+# 3. .envファイルの内容確認（APIキー部分のみ）
+if env_path.exists():
+    try:
+        with open(env_path, 'r') as f:
+            content = f.read()
+        print(f".envファイルサイズ: {len(content)} 文字")
+        
+        # OPENAI_API_KEYを含む行を探す
+        lines = content.split('\n')
+        for i, line in enumerate(lines, 1):
+            if 'OPENAI_API_KEY' in line:
+                # APIキーの値部分を隠して表示
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    masked_value = value[:10] + '...' if len(value) > 10 else value
+                    print(f"行{i}: {key}={masked_value}")
+                else:
+                    print(f"行{i}: {line} (=が含まれていません)")
+    except Exception as e:
+        print(f".envファイル読み取りエラー: {e}")
+
+# 4. dotenv読み込み前の環境変数
+print(f"読み込み前 OPENAI_API_KEY: {bool(os.getenv('OPENAI_API_KEY'))}")
+
+# 5. dotenv読み込み
+print("load_dotenv()実行中...")
+load_result = load_dotenv()
+print(f"load_dotenv()結果: {load_result}")
+
+# 6. 読み込み後の確認
+openai_key = os.getenv('OPENAI_API_KEY')
+print(f"読み込み後 OPENAI_API_KEY存在: {bool(openai_key)}")
+if openai_key:
+    print(f"APIキー先頭10文字: {openai_key[:10]}...")
+    print(f"APIキー長さ: {len(openai_key)}")
+    print(f"APIキーにsk-が含まれる: {'sk-' in openai_key}")
+else:
+    print("OPENAI_API_KEYが読み込まれませんでした")
+
+# 7. 全環境変数から関連するものを探す
+relevant_vars = {k: v[:10] + '...' if len(v) > 10 else v 
+                 for k, v in os.environ.items() 
+                 if 'OPENAI' in k.upper() or 'API' in k.upper()}
+print(f"関連する環境変数: {relevant_vars}")
+
+print("=== 詳細デバッグ終了 ===")
 
 load_dotenv()
 
