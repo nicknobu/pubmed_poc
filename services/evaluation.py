@@ -1,11 +1,11 @@
-# 新ファイル: services/evaluation.py
-"""論文要約の品質評価機能"""
+# 修正版: services/evaluation.py
+"""論文要約の品質評価機能（文法エラー修正版）"""
 
 import numpy as np
 import openai
 import os
-from typing import Dict, Optional
 import re
+from typing import Dict, Optional
 
 class SummaryEvaluator:
     """要約品質評価クラス"""
@@ -72,9 +72,89 @@ class SummaryEvaluator:
             return self._create_error_result(f"評価処理エラー: {str(e)}")
     
     def extract_abstract(self, text: str) -> Optional[str]:
-        """論文からAbstractを抽出"""
+        """論文からAbstractを抽出（構造化Abstract対応）"""
         lines = text.split('\n')
         
+        # Method 1: 構造化Abstract (Background → Methods → Results → Conclusion)
+        abstract_sections = self._extract_structured_abstract(lines)
+        if abstract_sections:
+            return abstract_sections
+        
+        # Method 2: 従来のAbstract抽出
+        abstract_content = self._extract_traditional_abstract(lines)
+        if abstract_content:
+            return abstract_content
+        
+        # Method 3: 冒頭部分からの推定
+        return self._extract_from_beginning(lines)
+    
+    def _extract_structured_abstract(self, lines: list) -> Optional[str]:
+        """構造化Abstract (Background/Methods/Results/Conclusion) を抽出"""
+        abstract_parts = []
+        current_section = None
+        in_abstract_area = False
+        
+        for i, line in enumerate(lines):
+            line_clean = line.strip()
+            line_lower = line_clean.lower()
+            
+            # Abstract領域の開始を検出
+            if ('abstract' in line_lower and len(line_clean) < 50 and 
+                not line_lower.startswith('background')):
+                in_abstract_area = True
+                continue
+            
+            # Background以降のセクション検出
+            if in_abstract_area or any(section in line_lower for section in ['background', 'objective', 'purpose']):
+                in_abstract_area = True
+                
+                # セクション見出しの検出
+                if line_lower in ['background', 'methods', 'results', 'conclusion', 'conclusions']:
+                    current_section = line_lower
+                    continue
+                elif (line_lower.startswith('background') or line_lower.startswith('objective') or 
+                      line_lower.startswith('purpose')):
+                    current_section = 'background'
+                    # 見出し行に内容が含まれている場合は処理
+                    if len(line_clean) > len(line_lower.split()[0]) + 5:
+                        content = line_clean.split(' ', 1)[1] if ' ' in line_clean else ''
+                        if content:
+                            abstract_parts.append(content)
+                    continue
+                elif line_lower.startswith('method'):
+                    current_section = 'methods'
+                    continue
+                elif line_lower.startswith('result'):
+                    current_section = 'results'
+                    continue
+                elif line_lower.startswith('conclusion'):
+                    current_section = 'conclusion'
+                    continue
+                
+                # Abstract終了の判定
+                if (line_lower in ['keywords', 'keyword'] or 
+                    line_lower.startswith('keywords:') or
+                    line_lower.startswith('keyword:') or
+                    any(keyword in line_lower for keyword in ['introduction', '## introduction', 'citation'])):
+                    break
+                
+                # 内容の追加
+                if current_section and line_clean and len(line_clean) > 10:
+                    # 箇条書きや番号を除去
+                    cleaned_line = re.sub(r'^[•·-]\s*', '', line_clean)
+                    cleaned_line = re.sub(r'^\d+[\.)]\s*', '', cleaned_line)
+                    
+                    if cleaned_line and not cleaned_line.lower().startswith(('abstract', 'background', 'method', 'result', 'conclusion')):
+                        abstract_parts.append(cleaned_line)
+        
+        # 十分な内容が抽出された場合のみ返す
+        if abstract_parts and len(' '.join(abstract_parts)) > 200:
+            return ' '.join(abstract_parts)
+        
+        return None
+    
+    def _extract_traditional_abstract(self, lines: list) -> Optional[str]:
+        """従来型のAbstract抽出"""
         abstract_lines = []
         in_abstract = False
         
@@ -83,41 +163,50 @@ class SummaryEvaluator:
             line_lower = line_clean.lower()
             
             # Abstract開始の判定
-            if (('abstract' in line_lower or 'summary' in line_lower) and 
-                len(line_clean) < 50 and 
-                not line_lower.startswith('background')):
+            if ('abstract' in line_lower and len(line_clean) < 50):
                 in_abstract = True
                 continue
             
             # Abstract終了の判定
             if in_abstract:
                 if (any(keyword in line_lower for keyword in 
-                       ['introduction', 'keyword', 'method', 'background', '##', 'objective']) and 
-                    len(line_clean) < 50):
+                       ['introduction', 'keywords', '## ', 'citation', 'references']) and 
+                    len(line_clean) < 100):
                     break
                 
-                # 空行が2回以上続いたら終了
-                if line_clean == '':
+                # 空行は無視
+                if not line_clean:
                     continue
                 
                 # 有効な内容行を追加
                 if len(line_clean) > 10:
                     abstract_lines.append(line_clean)
         
-        # Abstractが見つからない場合、冒頭部分から推定
-        if not abstract_lines:
-            # 最初の段落群から推定
-            early_lines = []
-            for line in lines[:20]:  # 最初の20行をチェック
-                if len(line.strip()) > 30:
-                    early_lines.append(line.strip())
-                if len(' '.join(early_lines)) > 500:  # 適度な長さで切る
-                    break
-            
-            if early_lines:
-                return ' '.join(early_lines)
+        if abstract_lines and len(' '.join(abstract_lines)) > 100:
+            return ' '.join(abstract_lines)
         
-        return ' '.join(abstract_lines) if abstract_lines else None
+        return None
+    
+    def _extract_from_beginning(self, lines: list) -> Optional[str]:
+        """冒頭部分からAbstractを推定"""
+        early_lines = []
+        
+        for line in lines[:30]:  # 最初の30行をチェック
+            line_clean = line.strip()
+            
+            # タイトルやメタデータをスキップ
+            if (len(line_clean) > 30 and 
+                not line_clean.lower().startswith(('title:', 'author', 'doi:', 'pmid:'))):
+                early_lines.append(line_clean)
+                
+                # 適度な長さで切る
+                if len(' '.join(early_lines)) > 800:
+                    break
+        
+        if early_lines and len(' '.join(early_lines)) > 200:
+            return ' '.join(early_lines)
+        
+        return None
     
     def preprocess_summary(self, summary: str) -> str:
         """3点要約を統合してテキスト化"""
