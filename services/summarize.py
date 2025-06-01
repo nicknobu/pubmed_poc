@@ -1,5 +1,8 @@
-# 緊急品質改善 - services/summarize.py の改良版
+# 緊急修正：services/summarize.py
+# ベクトルストアをクリーンにして新しいセッションで実行
 
+import tempfile
+import shutil
 from pathlib import Path
 from infra.pdf_fetcher import fetch_pdf
 from infra.vector_store import get_vector_store
@@ -9,96 +12,160 @@ from langchain.chains import RetrievalQA
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.prompts import PromptTemplate
+import chromadb
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import OpenAIEmbeddings
+import os
 
-def summarize_text_improved(text: str) -> str:
-    """大幅改良された要約機能"""
+def create_clean_vector_store():
+    """毎回新しいベクトルストアを作成（古いデータ混入を防ぐ）"""
+    # 一時ディレクトリで新しいベクトルストアを作成
+    temp_dir = tempfile.mkdtemp(prefix="pubmed_vs_")
+    
+    api_key = os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY環境変数が設定されていません")
+    
+    embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+    vs = Chroma(persist_directory=temp_dir, embedding_function=embeddings)
+    
+    return vs, temp_dir
+
+def summarize_text_fixed(text: str) -> str:
+    """ベクトルストア問題を修正した要約機能"""
     try:
         if len(text.strip()) < 100:
             return "テキストが短すぎて要約できません。"
         
-        # 重要：AbstractとConclusionを優先的に抽出
-        important_sections = extract_key_sections(text)
+        print("🔧 新しいベクトルストアを作成中...")
         
-        # 改良されたチャンク分割
-        docs = text_to_documents_improved(text, important_sections)
+        # クリーンなベクトルストアを作成
+        vs, temp_dir = create_clean_vector_store()
         
-        # ベクトルストア構築
-        vs = get_vector_store()
-        vs.add_documents(docs)
+        try:
+            # 重要セクション抽出
+            important_sections = extract_key_sections(text)
+            print(f"📋 抽出されたセクション: {list(important_sections.keys())}")
+            
+            # 改良されたチャンク分割
+            docs = text_to_documents_improved(text, important_sections)
+            print(f"📦 作成されたチャンク数: {len(docs)}")
+            
+            # 新しいベクトルストアに追加
+            vs.add_documents(docs)
+            print("✅ ベクトルストアに文書を追加完了")
+            
+            # RAG検索設定
+            retriever = vs.as_retriever(
+                search_type="similarity",  # まずシンプルに
+                search_kwargs={"k": 8}     # 適度な数のチャンクを取得
+            )
+            
+            # 検索テスト（デバッグ用）
+            test_query = "骨粗しょう症 コンプライアンス 結果"
+            test_docs = retriever.get_relevant_documents(test_query)
+            print(f"🔍 検索テスト結果: {len(test_docs)} 文書取得")
+            if test_docs:
+                print(f"🎯 最初の文書: {test_docs[0].page_content[:100]}...")
+            
+            # LLM設定
+            llm = ChatOpenAI(
+                model_name="gpt-4o-mini", 
+                temperature=0.1,
+                max_tokens=1200
+            )
+            
+            # 医学論文専用プロンプト
+            medical_prompt = PromptTemplate(
+                template="""
+あなたは医学論文の専門要約者です。以下の論文の関連部分を読んで、正確な3点要約を日本語で作成してください。
 
-        # 検索戦略改善：より多くの関連文書を取得
-        retriever = vs.as_retriever(
-            search_type="mmr",  # Maximum Marginal Relevance で多様性確保
-            search_kwargs={
-                "k": 10,          # より多くのチャンクを取得
-                "fetch_k": 20,    # 候補をより多く取得
-                "lambda_mult": 0.7  # 関連性と多様性のバランス
-            }
-        )
-
-        # 医学論文専用LLM設定
-        llm = ChatOpenAI(
-            model_name="gpt-4o-mini", 
-            temperature=0.05,  # より一貫性のある出力
-            max_tokens=1200   # 十分な要約長を確保
-        )
-
-        # 医学論文専用プロンプトテンプレート
-        medical_prompt = PromptTemplate(
-            template="""
-あなたは医学論文の専門要約者です。提供された論文内容から、以下の3点構成で正確な要約を作成してください。
-
-論文の関連部分:
+論文の関連内容:
 {context}
 
 要約要件：
-1. 【研究背景・目的】
-   - この研究がなぜ重要か、解決したい医学的課題は何か
-   - 対象疾患の特徴や既存治療の課題
-   
-2. 【方法・主要結果】  
-   - 研究デザインと対象（症例数、期間等）
-   - 主要な治療法や介入内容
-   - 重要な有効性・安全性データ（数値含む）
-   
-3. 【結論・臨床的意義】
-   - この研究から得られた重要な知見
-   - 臨床現場への影響や今後の方向性
+1. 【研究背景・目的】この研究の背景と目的を1-2文で
+2. 【方法・主要結果】研究方法と重要な結果（数値データ含む）を1-2文で  
+3. 【結論・臨床的意義】研究から得られた結論と臨床的意義を1-2文で
 
-注意事項：
-- 各点は2-3文で簡潔に
-- 重要な数値データは必ず含める
+重要：
+- 関連内容から直接的に情報を抽出する
 - 文献検索手順ではなく研究内容を要約する
-- 医学的に正確な表現を使用
+- 数値データがあれば必ず含める
 
 質問: {question}
 
 医学論文要約:""",
-            input_variables=["context", "question"]
-        )
+                input_variables=["context", "question"]
+            )
+            
+            # RAGチェーン構築
+            chain = RetrievalQA.from_chain_type(
+                llm=llm, 
+                retriever=retriever,
+                chain_type="stuff",
+                chain_type_kwargs={"prompt": medical_prompt}
+            )
+            
+            question = "この医学論文について、研究背景・方法結果・結論の3点で要約してください。"
+            print("🤖 LLMによる要約生成中...")
+            answer = chain.run(question)
+            
+            return answer.strip()
+            
+        finally:
+            # 一時ディレクトリをクリーンアップ
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            print("🧹 一時ファイルをクリーンアップ")
+            
+    except Exception as e:
+        print(f"❌ 修正要約エラー: {e}")
+        # フォールバック：直接LLM要約
+        return direct_llm_summary_simple(text)
 
-        # RAGチェーン構築
-        chain = RetrievalQA.from_chain_type(
-            llm=llm, 
-            retriever=retriever,
-            chain_type="stuff",  # より多くの文脈を含める
-            chain_type_kwargs={"prompt": medical_prompt}
-        )
+def direct_llm_summary_simple(text: str) -> str:
+    """RAGを使わないシンプルLLM要約（緊急用）"""
+    try:
+        llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.1, max_tokens=1000)
+        
+        # 重要部分を抽出
+        sections = extract_key_sections(text)
+        
+        # Abstract + Results + Conclusionを優先
+        key_content = ""
+        if sections['abstract']:
+            key_content += f"Abstract: {sections['abstract'][:1000]}\n\n"
+        if sections['results']:
+            key_content += f"Results: {sections['results'][:1000]}\n\n"  
+        if sections['conclusion']:
+            key_content += f"Conclusion: {sections['conclusion'][:1000]}\n\n"
+        
+        # 重要部分がない場合は全文の一部を使用
+        if not key_content.strip():
+            key_content = text[:3000]
+        
+        prompt = f"""
+以下の医学論文の重要部分を読んで、3点で正確に要約してください：
 
-        question = "上記の医学論文について、研究背景・方法結果・結論の3点で要約してください。"
-        answer = chain.run(question)
+{key_content}
+
+要約形式：
+1. 【研究背景・目的】
+2. 【方法・主要結果】（具体的な数値データを含む）
+3. 【結論・臨床的意義】
+
+各点は1-2文で簡潔に。重要な数値は必ず含めてください。
+
+要約：
+"""
         
-        # 品質チェック
-        if is_poor_quality_summary(answer, text):
-            # フォールバック：直接LLM要約
-            return direct_llm_summary(text)
-        
-        return answer.strip()
+        response = llm.invoke(prompt)
+        return response.content.strip()
         
     except Exception as e:
-        print(f"改良要約エラー: {e}")
-        # フォールバック処理
-        return direct_llm_summary(text)
+        return f"要約生成エラー: {e}"
+
+# extract_key_sections と text_to_documents_improved 関数は前回と同じものを使用
 
 def extract_key_sections(text: str) -> dict:
     """重要セクション（Abstract, Results, Conclusion）を抽出"""
@@ -115,26 +182,31 @@ def extract_key_sections(text: str) -> dict:
     for line in lines:
         line_lower = line.lower().strip()
         
-        # セクション判定
-        if any(word in line_lower for word in ['abstract', 'summary']) and len(line) < 50:
+        # セクション判定（より正確に）
+        if (any(word in line_lower for word in ['abstract', 'summary']) and 
+            len(line) < 50 and 
+            not line_lower.startswith('background')):
             current_section = 'abstract'
             continue
-        elif any(word in line_lower for word in ['result', 'finding']) and len(line) < 50:
+        elif (any(word in line_lower for word in ['result', 'finding']) and 
+              len(line) < 50):
             current_section = 'results'
             continue
-        elif any(word in line_lower for word in ['conclusion', 'discussion']) and len(line) < 50:
+        elif (any(word in line_lower for word in ['conclusion', 'discussion']) and 
+              len(line) < 50):
             current_section = 'conclusion'
             continue
-        elif any(word in line_lower for word in ['method', 'material']) and len(line) < 50:
+        elif (any(word in line_lower for word in ['method', 'material']) and 
+              len(line) < 50):
             current_section = 'methods'
             continue
-        elif line_lower.startswith('##') or line_lower.startswith('#'):
-            # 新しいセクションが始まった
+        elif line_lower.startswith('##') or (line_lower.startswith('#') and len(line) < 100):
+            # 新しいセクションが始まった可能性
             current_section = None
             continue
             
         # 内容を該当セクションに追加
-        if current_section and line.strip():
+        if current_section and line.strip() and len(line.strip()) > 10:
             sections[current_section] += line + ' '
     
     return sections
@@ -143,15 +215,14 @@ def text_to_documents_improved(text: str, key_sections: dict) -> list[Document]:
     """医学論文用改良チャンク分割"""
     docs = []
     
-    # 重要セクションを優先的にドキュメント化（重み付け）
+    # 重要セクションを優先的にドキュメント化
     for section_name, section_text in key_sections.items():
-        if section_text.strip():
-            # 重要セクションには高い重みを付与
+        if section_text.strip() and len(section_text.strip()) > 50:
             weight = {
                 'abstract': 3.0,
                 'conclusion': 3.0, 
                 'results': 2.5,
-                'methods': 1.0
+                'methods': 1.5
             }.get(section_name, 1.0)
             
             doc = Document(
@@ -164,17 +235,25 @@ def text_to_documents_improved(text: str, key_sections: dict) -> list[Document]:
             )
             docs.append(doc)
     
-    # 通常のチャンク分割も併用
+    # 通常のチャンク分割も併用（重複除去）
+    used_content = set()
+    for doc in docs:
+        used_content.add(doc.page_content[:100])  # 重複チェック用
+    
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1200,
-        chunk_overlap=200,
+        chunk_size=1000,
+        chunk_overlap=100,
         separators=["\n\n## ", "\n\n", "\n", "。", ". ", " ", ""]
     )
     
     chunks = splitter.split_text(text)
     
     for i, chunk in enumerate(chunks):
-        if len(chunk.strip()) > 50:  # 短すぎるチャンクは除外
+        chunk_preview = chunk[:100]
+        if (len(chunk.strip()) > 50 and 
+            chunk_preview not in used_content and
+            not any(preview in chunk_preview for preview in used_content)):
+            
             doc = Document(
                 page_content=chunk,
                 metadata={
@@ -184,69 +263,17 @@ def text_to_documents_improved(text: str, key_sections: dict) -> list[Document]:
                 }
             )
             docs.append(doc)
+            used_content.add(chunk_preview)
     
     return docs
 
-def is_poor_quality_summary(summary: str, original_text: str) -> bool:
-    """要約品質の簡易チェック"""
-    summary_lower = summary.lower()
-    
-    # 悪い要約の特徴
-    bad_indicators = [
-        'システマティックレビュー', 'スクリーニング', '論文が選定',
-        '文献検索', 'データベース', '検索され', '調査者',
-        '重複を除いた', 'フルテキスト評価'
-    ]
-    
-    # これらのキーワードが多く含まれていたら品質が悪い
-    bad_score = sum(1 for indicator in bad_indicators if indicator in summary_lower)
-    
-    # 重要な医学的要素が含まれているかチェック
-    good_indicators = [
-        '治療', '患者', '効果', '安全性', '症例', '結果',
-        '改善', '有効性', '臨床', '疾患', '研究'
-    ]
-    
-    good_score = sum(1 for indicator in good_indicators if indicator in summary_lower)
-    
-    return bad_score >= 3 and good_score <= 2
-
-def direct_llm_summary(text: str) -> str:
-    """RAGを使わない直接LLM要約（フォールバック）"""
-    try:
-        llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.1, max_tokens=1000)
-        
-        prompt = f"""
-以下の医学論文を読んで、3点で要約してください：
-
-1. 【研究背景・目的】：なぜこの研究が重要か、解決したい医学的課題
-2. 【方法・主要結果】：研究デザイン、対象、重要な結果（数値含む）
-3. 【結論・臨床的意義】：得られた知見と臨床への影響
-
-注意：文献検索手順ではなく、研究の医学的内容を要約してください。
-
-論文内容：
-{text[:4000]}  # トークン制限考慮
-
-要約：
-"""
-        
-        response = llm.invoke(prompt)
-        return response.content.strip()
-        
-    except Exception as e:
-        return f"要約生成エラー: {e}"
-
-# 既存の関数も改良版に置き換え
+# 既存関数の置き換え
 def summarize_text(text: str) -> str:
-    """既存関数の置き換え"""
-    return summarize_text_improved(text)
+    """メイン要約関数"""
+    return summarize_text_fixed(text)
 
 def summarize_pdf(pdf_path: str) -> str:
-    """PDF要約も改良版を使用"""
+    """PDF要約も修正版を使用"""
     docs = load_and_split(Path(pdf_path))
-    
-    # PDFからテキストを結合
     full_text = "\n".join([doc.page_content for doc in docs])
-    
-    return summarize_text_improved(full_text)
+    return summarize_text_fixed(full_text)
