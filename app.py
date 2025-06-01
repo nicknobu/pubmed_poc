@@ -423,26 +423,45 @@ if st.button("要約"):
                                 st.markdown("---")
                                 st.subheader("📊 要約品質評価")
                                 
+                                # 言語ペア情報を表示
+                                is_multilingual = evaluation_result.get("is_multilingual", False)
+                                evaluation_note = evaluation_result.get("evaluation_note", "標準評価")
+                                
+                                if is_multilingual:
+                                    st.info(f"🌐 {evaluation_note} - 英語Abstract→日本語要約の専用基準を適用")
+                                else:
+                                    st.info(f"🔤 {evaluation_note}")
+                                
                                 # メイン指標表示
                                 col1, col2, col3, col4 = st.columns(4)
                                 
                                 with col1:
                                     cosine_score = evaluation_result["cosine_similarity"]
-                                    cosine_color = "🟢" if cosine_score >= 0.8 else "🟡" if cosine_score >= 0.6 else "🔴"
+                                    # 多言語基準での色分け
+                                    if is_multilingual:
+                                        cosine_color = "🟢" if cosine_score >= 0.65 else "🟡" if cosine_score >= 0.55 else "🔴"
+                                    else:
+                                        cosine_color = "🟢" if cosine_score >= 0.8 else "🟡" if cosine_score >= 0.6 else "🔴"
+                                    
                                     st.metric(
                                         label="コサイン類似度", 
                                         value=f"{cosine_score:.3f}",
-                                        help="Abstract vs 要約の意味的類似度"
+                                        help="Abstract vs 要約の意味的類似度（英日間は0.5+で合格）" if is_multilingual else "Abstract vs 要約の意味的類似度"
                                     )
                                     st.write(f"{cosine_color} {cosine_score:.3f}")
                                 
                                 with col2:
                                     overlap_score = evaluation_result["word_overlap"]
-                                    overlap_color = "🟢" if overlap_score >= 0.4 else "🟡" if overlap_score >= 0.2 else "🔴"
+                                    # 多言語基準での色分け
+                                    if is_multilingual:
+                                        overlap_color = "🟢" if overlap_score >= 0.20 else "🟡" if overlap_score >= 0.15 else "🔴"
+                                    else:
+                                        overlap_color = "🟢" if overlap_score >= 0.4 else "🟡" if overlap_score >= 0.2 else "🔴"
+                                    
                                     st.metric(
                                         label="単語重複率", 
                                         value=f"{overlap_score:.3f}",
-                                        help="共通する重要単語の割合"
+                                        help="医学概念の翻訳一致率（英日間は0.15+で良好）" if is_multilingual else "共通する重要単語の割合"
                                     )
                                     st.write(f"{overlap_color} {overlap_score:.3f}")
                                 
@@ -458,21 +477,32 @@ if st.button("要約"):
                                 
                                 with col4:
                                     overall_score = evaluation_result["overall_score"]
-                                    overall_color = "🟢" if overall_score >= 0.8 else "🟡" if overall_score >= 0.6 else "🔴"
+                                    # 多言語基準での色分け
+                                    if is_multilingual:
+                                        overall_color = "🟢" if overall_score >= 0.65 else "🟡" if overall_score >= 0.55 else "🔴"
+                                    else:
+                                        overall_color = "🟢" if overall_score >= 0.8 else "🟡" if overall_score >= 0.6 else "🔴"
+                                    
                                     st.metric(
                                         label="総合スコア", 
                                         value=f"{overall_score:.3f}",
-                                        help="全指標の重み付き平均"
+                                        help="英日間調整済み総合評価" if is_multilingual else "全指標の重み付き平均"
                                     )
                                     st.write(f"{overall_color} {overall_score:.3f}")
                                 
-                                # 合格判定
+                                # 合格判定（修正版）
                                 st.markdown("### 🎯 品質判定")
                                 if evaluation_result["pass_threshold"]:
-                                    st.success(f"✅ **高品質要約** (類似度 {cosine_score:.3f} ≥ 0.8)")
+                                    if is_multilingual:
+                                        st.success(f"✅ **高品質要約** (英日間類似度 {cosine_score:.3f} ≥ 0.50)")
+                                    else:
+                                        st.success(f"✅ **高品質要約** (類似度 {cosine_score:.3f} ≥ 0.80)")
                                     st.success(f"🏆 品質レベル: **{evaluation_result['quality_level']}**")
                                 else:
-                                    st.warning(f"⚠️ **要改善** (類似度 {cosine_score:.3f} < 0.8)")
+                                    if is_multilingual:
+                                        st.warning(f"⚠️ **要改善** (英日間類似度 {cosine_score:.3f} < 0.50)")
+                                    else:
+                                        st.warning(f"⚠️ **要改善** (類似度 {cosine_score:.3f} < 0.80)")
                                     st.info(f"📈 品質レベル: **{evaluation_result['quality_level']}**")
                                 
                                 # 改善提案
@@ -507,17 +537,30 @@ if st.button("要約"):
                                     )
                                     
                                     st.markdown("**評価アルゴリズム:**")
-                                    st.markdown("""
-                                    - **コサイン類似度**: OpenAI text-embedding-3-small使用
-                                    - **単語重複率**: Jaccard係数による共通語彙計測
-                                    - **概念カバー率**: 数値データ・重要概念の保持率
-                                    - **総合スコア**: 重み付き平均 (0.6:0.25:0.15)
-                                    """)
+                                    if is_multilingual:
+                                        st.markdown("""
+                                        - **コサイン類似度**: OpenAI text-embedding-3-small使用（英日間基準）
+                                        - **単語重複率**: 医学概念辞書による翻訳一致評価
+                                        - **概念カバー率**: 英語数値→日本語数値の保持率評価
+                                        - **総合スコア**: 英日間重み付き平均 (0.45:0.15:0.40)
+                                        - **判定基準**: コサイン類似度≥0.50で合格、≥0.65で優秀
+                                        """)
+                                    else:
+                                        st.markdown("""
+                                        - **コサイン類似度**: OpenAI text-embedding-3-small使用
+                                        - **単語重複率**: Jaccard係数による共通語彙計測
+                                        - **概念カバー率**: 数値データ・重要概念の保持率
+                                        - **総合スコア**: 重み付き平均 (0.6:0.25:0.15)
+                                        - **判定基準**: コサイン類似度≥0.80で合格、≥0.85で優秀
+                                        """)
                                     
                                     # 成功のお祝いメッセージ
-                                    if cosine_score >= 0.8:
+                                    if evaluation_result["pass_threshold"]:
                                         st.balloons()
-                                        st.success("🎉 LinkedIn公開レベルの高品質要約を達成しました！")
+                                        if is_multilingual:
+                                            st.success("🎉 英日間翻訳として高品質な要約を達成しました！LinkedIn公開レベルです！")
+                                        else:
+                                            st.success("🎉 LinkedIn公開レベルの高品質要約を達成しました！")
                             
                             else:
                                 st.error(f"❌ 品質評価エラー: {evaluation_result['error']}")
@@ -795,28 +838,28 @@ with st.sidebar:
     
     st.success("✅ HTML/XML対応により大幅に対象拡大！")
     
-    # 🆕 品質評価情報追加
-    st.header("🎯 品質評価機能")
+    # 🆕 多言語対応品質評価情報
+    st.header("🎯 多言語品質評価")
     st.markdown("""
-    **自動品質評価:**
-    - Abstract vs 要約の類似度
-    - 重要単語の包含率  
-    - 数値データの保持率
+    **自動品質評価システム:**
+    - Abstract vs 要約の意味的類似度
+    - 医学概念の翻訳一致率  
+    - 重要数値データの保持率
     
-    **合格基準:**
-    - コサイン類似度 ≥ 0.8
-    - 総合スコア ≥ 0.8
+    **言語ペア別基準:**
+    - 🌐 **英日間**: コサイン類似度≥0.50で合格
+    - 🔤 **同言語**: コサイン類似度≥0.80で合格
+    - 📊 **概念重視**: 翻訳品質で重み調整
     """)
     
     st.header("🔥 推奨使用例")
     st.markdown("""
     **PMCIDで試してみる:**
     ```
-    PMC12085841  (PDF無しでもOK)
-    PMC5334499   (PDF有り)
-    PMC8790252   (PDF有り)
+    PMC12085841  (英→日 高品質)
+    PMC5334499   (PDF対応)
+    PMC8790252   (XML対応)
     ```
-   
     """)
     
     st.header("💡 取得優先順位")
@@ -826,15 +869,21 @@ with st.sidebar:
     3. **HTML版** (フォールバック)
     """)
     
-    # 🆕 品質スコア説明
+    # 🆕 多言語品質スコア説明
     st.header("📈 品質スコア説明")
     st.markdown("""
-    **🟢 優秀**: 0.85以上
-    **🟡 良好**: 0.75-0.84  
-    **🔴 要改善**: 0.75未満
+    **🌐 英日間評価基準:**
+    - 🟢 **優秀**: 0.65以上
+    - 🟡 **良好**: 0.55-0.64  
+    - 🔴 **要改善**: 0.55未満
     
-    高品質要約の条件:
-    - 原文の意味を正確に保持
-    - 重要な数値データを包含
-    - 簡潔で読みやすい構成
+    **🔤 同言語評価基準:**
+    - 🟢 **優秀**: 0.85以上
+    - 🟡 **良好**: 0.75-0.84  
+    - 🔴 **要改善**: 0.75未満
+    
+    **🎯 多言語対応の特徴:**
+    - 英語Abstract→日本語要約の現実的基準
+    - 医学専門用語の概念レベル評価
+    - 翻訳品質に応じた動的重み調整
     """)
