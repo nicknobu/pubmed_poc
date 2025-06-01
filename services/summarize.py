@@ -22,7 +22,13 @@ def summarize_pdf(pdf_path: str) -> str:
     llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0)
     chain = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
 
-    question = "論文を 3 点で要約し、日本語で回答してください。"
+    question = """この医学論文について、以下の3点で正確に要約してください：
+
+1. 【研究目的・背景】：なぜこの研究を行ったか、解決したい問題は何か
+2. 【方法・主要結果】：どのような手法で、どんな重要な結果が得られたか  
+3. 【結論・臨床的意義】：この研究から何が分かり、医療現場にどう活かせるか
+
+各点は1-2文で簡潔に、重要な数値があれば含めて日本語で回答してください。"""
     answer: str = chain.run(question)
     return answer.strip()
 
@@ -56,7 +62,7 @@ def text_to_documents(text: str) -> list[Document]:
     # RecursiveCharacterTextSplitterでチャンク化
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
-        chunk_overlap=50,
+        chunk_overlap=200,
         separators=["\n\n", "\n", "。", ".", " ", ""]
     )
     
