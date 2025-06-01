@@ -132,7 +132,7 @@ def summarize_text_fixed(text: str) -> str:
     except Exception as e:
         print(f"❌ 修正要約エラー: {e}")
         # フォールバック：直接LLM要約
-        return direct_llm_summary_simple(text)
+        return direct_llm_summary_detailed(text)
 
 def text_to_documents_improved_extended(text: str, key_sections: dict) -> list[Document]:
     """より多くの情報を含むチャンク分割"""

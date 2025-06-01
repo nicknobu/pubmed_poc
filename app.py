@@ -368,12 +368,11 @@ st.success("🆕 **新機能**: PDF未提供の記事もHTML/XMLから本文抽�
 st.markdown("""
 **対応する入力形式 & 取得方法：**
 - 📋 **PMCID**: `PMC1234567` → PDF優先、HTML/XMLフォールバック
-- 🔢 **PMID**: `12345678` → PMCID変換後、上記と同様
 - 📄 **PDF URL**: 直接PDF取得
-- 💾 **ローカルファイル**: PDF/テキストファイル対応
 """)
 
-input_text = st.text_input("論文の識別子またはURL（PMCIDを推奨）")
+input_text = st.text_input("PMCIDまたはPDFのURLを入力してください", placeholder="例: PMC12085841 または https://example.com/sample.pdf")
+
 
 if st.button("要約"):
     if not input_text:
