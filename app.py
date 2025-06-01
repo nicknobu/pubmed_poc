@@ -416,6 +416,87 @@ if st.button("要約"):
                 import traceback
                 st.error(f"要約処理でエラーが発生しました: {e}")
                 st.text(traceback.format_exc())
+# デバッグ機能追加（要約品質改善用）
+st.markdown("---")
+st.subheader("🔧 デバッグ機能")
+
+if st.button("🔍 RAG取得内容を確認"):
+    if not input_text:
+        st.error("まず識別子またはURLを入力してください")
+    else:
+        with st.spinner("デバッグ情報を取得中..."):
+            try:
+                # コンテンツ取得
+                content_type, content = resolve_to_content(input_text)
+                
+                if not content:
+                    st.error("コンテンツの取得に失敗しました。")
+                    st.stop()
+                
+                if content_type == 'text':
+                    # RAGの動作を詳しく確認
+                    from services.summarize import text_to_documents_improved, extract_key_sections
+                    from infra.vector_store import get_vector_store
+                    
+                    st.write("### 📄 取得したコンテンツの概要")
+                    st.write(f"文字数: {len(content):,} 文字")
+                    st.write(f"最初の200文字: {content[:200]}...")
+                    
+                    st.write("### 🎯 重要セクション抽出結果")
+                    key_sections = extract_key_sections(content)
+                    
+                    for section_name, section_text in key_sections.items():
+                        if section_text.strip():
+                            st.write(f"**{section_name.upper()}セクション** ({len(section_text)}文字):")
+                            st.write(f"{section_text[:300]}...")
+                            st.write("---")
+                    
+                    st.write("### 🔍 RAGチャンク分割結果")
+                    docs = text_to_documents_improved(content, key_sections)
+                    st.write(f"総チャンク数: {len(docs)}")
+                    
+                    # 重要度順にソート
+                    docs_sorted = sorted(docs, key=lambda x: x.metadata.get('importance', 1.0), reverse=True)
+                    
+                    for i, doc in enumerate(docs_sorted[:5]):
+                        importance = doc.metadata.get('importance', 1.0)
+                        section = doc.metadata.get('section', 'general')
+                        st.write(f"**チャンク {i+1}** (重要度: {importance}, セクション: {section}):")
+                        st.write(f"{doc.page_content[:400]}...")
+                        st.write("---")
+                    
+                    st.write("### 🔎 RAG検索結果")
+                    vs = get_vector_store()
+                    vs.add_documents(docs)
+                    
+                    # 複数のクエリで検索テスト
+                    test_queries = [
+                        "研究の目的と背景",
+                        "主要な結果と効果",
+                        "結論と臨床的意義",
+                        "治療効果と安全性"
+                    ]
+                    
+                    retriever = vs.as_retriever(
+                        search_type="mmr",
+                        search_kwargs={"k": 5, "fetch_k": 10, "lambda_mult": 0.7}
+                    )
+                    
+                    for query in test_queries:
+                        st.write(f"**クエリ: '{query}'**")
+                        retrieved_docs = retriever.get_relevant_documents(query)
+                        
+                        for j, rdoc in enumerate(retrieved_docs[:2]):
+                            st.write(f"取得文書 {j+1}: {rdoc.page_content[:200]}...")
+                        st.write("---")
+                    
+                else:
+                    st.info("PDF形式のため、テキスト抽出後にデバッグ可能です")
+                    
+            except Exception as e:
+                import traceback
+                st.error(f"デバッグ処理でエラー: {e}")
+                st.text(traceback.format_exc())
 
 # サイドバーに統計と使用例
 with st.sidebar:
