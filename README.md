@@ -1,3 +1,14 @@
+---
+title: PubMed論文要約システム
+emoji: 🧬
+colorFrom: blue
+colorTo: green
+sdk: streamlit
+sdk_version: "1.28.0"
+app_file: app.py
+pinned: false
+---
+
 # 🧬 PubMed 医学論文要約システム
 
 **AI駆動開発による医学論文の3点要約PoC**
