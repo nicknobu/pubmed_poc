@@ -402,7 +402,7 @@ if st.button("要約"):
                     result = summarize_pdf(tmp_pdf_path)
                     os.unlink(tmp_pdf_path)
                     
-                    # PDF要約では品質評価をスキップ（原文テキストが取得困難なため）
+                    # PDF要約では品質評価をスキップ
                     st.success("📋 要約結果：")
                     st.write(result)
                     st.info("💡 PDF形式のため品質評価は実行されません")
@@ -414,7 +414,7 @@ if st.button("要約"):
                     st.success("📋 要約結果：")
                     st.write(result)
                     
-                    # 🆕 品質評価実行
+                    # 品質評価実行
                     with st.spinner("要約品質を評価中…"):
                         try:
                             evaluation_result = evaluate_summary(content, result)
@@ -483,12 +483,20 @@ if st.button("要約"):
                                 # 詳細情報（展開可能）
                                 with st.expander("🔍 評価詳細情報"):
                                     st.markdown("**抽出されたAbstract:**")
+                                    
+                                    # 正しいAbstractを表示
+                                    if "full_abstract" in evaluation_result:
+                                        actual_abstract = evaluation_result["full_abstract"]
+                                    else:
+                                        actual_abstract = evaluation_result.get("abstract_text", "抽出失敗")
+                                    
                                     st.text_area(
                                         "Abstract内容", 
-                                        evaluation_result.get("abstract_text", "抽出失敗"), 
-                                        height=100,
+                                        actual_abstract, 
+                                        height=150,
                                         disabled=True
                                     )
+                                    st.write(f"**文字数**: {len(actual_abstract)} 文字")
                                     
                                     st.markdown("**処理された要約:**")
                                     st.text_area(
@@ -505,6 +513,11 @@ if st.button("要約"):
                                     - **概念カバー率**: 数値データ・重要概念の保持率
                                     - **総合スコア**: 重み付き平均 (0.6:0.25:0.15)
                                     """)
+                                    
+                                    # 成功のお祝いメッセージ
+                                    if cosine_score >= 0.8:
+                                        st.balloons()
+                                        st.success("🎉 LinkedIn公開レベルの高品質要約を達成しました！")
                             
                             else:
                                 st.error(f"❌ 品質評価エラー: {evaluation_result['error']}")
@@ -513,8 +526,13 @@ if st.button("要約"):
                         except Exception as eval_error:
                             st.error(f"品質評価処理でエラーが発生: {eval_error}")
                             st.info("💡 品質評価なしでも要約は正常に生成されています")
+                            
+                            # エラー詳細をデバッグ情報として表示
+                            import traceback
+                            with st.expander("🔧 エラー詳細（デバッグ用）"):
+                                st.text(traceback.format_exc())
                 
-                # 取得方法を表示
+                # 取得方法を表示（try文内に移動）
                 st.markdown("---")
                 st.info(f"📊 取得方法: {content_type.upper()}形式")
                     
