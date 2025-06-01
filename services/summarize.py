@@ -58,7 +58,7 @@ def summarize_text_fixed(text: str) -> str:
             # RAG検索設定
             retriever = vs.as_retriever(
                 search_type="similarity",  # まずシンプルに
-                search_kwargs={"k": 8}     # 適度な数のチャンクを取得
+                search_kwargs={"k": 12}     # 適度な数のチャンクを取得
             )
             
             # 検索テスト（デバッグ用）
@@ -72,7 +72,7 @@ def summarize_text_fixed(text: str) -> str:
             llm = ChatOpenAI(
                 model_name="gpt-4o-mini", 
                 temperature=0.1,
-                max_tokens=1200
+                max_tokens=2500
             )
             
             # 医学論文専用プロンプト
@@ -84,14 +84,25 @@ def summarize_text_fixed(text: str) -> str:
 {context}
 
 要約要件：
-1. 【研究背景・目的】この研究の背景と目的を1-2文で
-2. 【方法・主要結果】研究方法と重要な結果（数値データ含む）を1-2文で  
-3. 【結論・臨床的意義】研究から得られた結論と臨床的意義を1-2文で
+1. 【研究背景・目的】
+   - 研究対象疾患の重要性と既存治療の課題（2-3文）
+   - この研究の具体的な目的と仮説（1-2文）
 
-重要：
-- 関連内容から直接的に情報を抽出する
-- 文献検索手順ではなく研究内容を要約する
-- 数値データがあれば必ず含める
+2. 【方法・主要結果】
+   - 研究デザイン、対象者数、期間、設定（1-2文）
+   - 重要な結果を具体的な数値とともに詳述（3-4文）
+   - 統計的有意性や信頼区間があれば含める
+
+3. 【結論・臨床的意義】
+   - 研究から得られた主要な知見（2-3文）
+   - 臨床現場への具体的な影響と推奨事項（1-2文）
+   - 研究の限界と今後の展望（1文）
+
+重要事項：
+- 各セクション合計150-250文字を目安に詳しく記述
+- 重要な数値データ、パーセンテージ、信頼区間は必ず含める
+- 医学的専門用語を適切に使用し、信頼性の高い要約とする
+- 結果の臨床的意義を具体的に説明する
 
 質問: {question}
 
@@ -123,47 +134,141 @@ def summarize_text_fixed(text: str) -> str:
         # フォールバック：直接LLM要約
         return direct_llm_summary_simple(text)
 
-def direct_llm_summary_simple(text: str) -> str:
-    """RAGを使わないシンプルLLM要約（緊急用）"""
+def text_to_documents_improved_extended(text: str, key_sections: dict) -> list[Document]:
+    """より多くの情報を含むチャンク分割"""
+    docs = []
+    
+    # 重要セクションを優先的にドキュメント化（文字数制限を緩和）
+    for section_name, section_text in key_sections.items():
+        if section_text.strip() and len(section_text.strip()) > 50:
+            weight = {
+                'abstract': 3.0,
+                'conclusion': 3.0, 
+                'results': 2.5,
+                'methods': 2.0  # Methodsの重要度も上げる
+            }.get(section_name, 1.0)
+            
+            # 長いセクションは分割して複数のチャンクに
+            if len(section_text) > 1500:
+                # 長いセクションを複数に分割
+                splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1500,
+                    chunk_overlap=200
+                )
+                sub_chunks = splitter.split_text(section_text)
+                
+                for i, sub_chunk in enumerate(sub_chunks):
+                    doc = Document(
+                        page_content=sub_chunk.strip(),
+                        metadata={
+                            "section": f"{section_name}_part_{i+1}",
+                            "importance": weight,
+                            "source": "key_section_split"
+                        }
+                    )
+                    docs.append(doc)
+            else:
+                doc = Document(
+                    page_content=section_text.strip(),
+                    metadata={
+                        "section": section_name,
+                        "importance": weight,
+                        "source": "key_section"
+                    }
+                )
+                docs.append(doc)
+    
+    # 通常のチャンク分割も併用（チャンクサイズを増加）
+    used_content = set()
+    for doc in docs:
+        used_content.add(doc.page_content[:100])
+    
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1500,  # 1000 → 1500 に増加
+        chunk_overlap=200,  # 100 → 200 に増加
+        separators=["\n\n## ", "\n\n", "\n", "。", ". ", " ", ""]
+    )
+    
+    chunks = splitter.split_text(text)
+    
+    for i, chunk in enumerate(chunks):
+        chunk_preview = chunk[:100]
+        if (len(chunk.strip()) > 50 and 
+            chunk_preview not in used_content and
+            not any(preview in chunk_preview for preview in used_content)):
+            
+            doc = Document(
+                page_content=chunk,
+                metadata={
+                    "chunk_id": i,
+                    "source": "general_chunk",
+                    "importance": 1.0
+                }
+            )
+            docs.append(doc)
+            used_content.add(chunk_preview)
+    
+    return docs
+
+def direct_llm_summary_detailed(text: str) -> str:
+    """RAGを使わない詳細LLM要約（フォールバック）"""
     try:
-        llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.1, max_tokens=1000)
+        llm = ChatOpenAI(
+            model_name="gpt-4o-mini", 
+            temperature=0.1, 
+            max_tokens=2500  # 大幅に増加
+        )
         
         # 重要部分を抽出
         sections = extract_key_sections(text)
         
-        # Abstract + Results + Conclusionを優先
+        # より多くの内容を含める
         key_content = ""
         if sections['abstract']:
-            key_content += f"Abstract: {sections['abstract'][:1000]}\n\n"
+            key_content += f"Abstract: {sections['abstract'][:2000]}\n\n"
         if sections['results']:
-            key_content += f"Results: {sections['results'][:1000]}\n\n"  
+            key_content += f"Results: {sections['results'][:2000]}\n\n"  
         if sections['conclusion']:
-            key_content += f"Conclusion: {sections['conclusion'][:1000]}\n\n"
+            key_content += f"Conclusion: {sections['conclusion'][:2000]}\n\n"
+        if sections['methods']:
+            key_content += f"Methods: {sections['methods'][:1500]}\n\n"
         
-        # 重要部分がない場合は全文の一部を使用
+        # 重要部分がない場合は全文のより多くの部分を使用
         if not key_content.strip():
-            key_content = text[:3000]
+            key_content = text[:6000]  # 3000 → 6000 に増加
         
         prompt = f"""
-以下の医学論文の重要部分を読んで、3点で正確に要約してください：
+以下の医学論文を読んで、詳細で有用な3点要約を日本語で作成してください：
 
 {key_content}
 
-要約形式：
-1. 【研究背景・目的】
-2. 【方法・主要結果】（具体的な数値データを含む）
-3. 【結論・臨床的意義】
+要約要件：
+1. 【研究背景・目的】（150-200文字程度）
+   - 対象疾患の重要性と既存治療の課題を詳述
+   - 本研究の具体的な目的と意義を明確に
 
-各点は1-2文で簡潔に。重要な数値は必ず含めてください。
+2. 【方法・主要結果】（200-300文字程度）
+   - 研究デザイン、対象者、期間を具体的に
+   - 重要な結果を数値データとともに詳細に記述
+   - 統計的有意性や信頼区間があれば含める
 
-要約：
+3. 【結論・臨床的意義】（150-200文字程度）
+   - 研究の主要な知見と臨床への具体的影響
+   - 研究の限界と今後の展望も含める
+
+注意：
+- 各点をしっかりとした分量で記述する
+- 数値データは必ず含める
+- 医学的に正確で詳細な表現を使用
+
+詳細要約：
 """
         
         response = llm.invoke(prompt)
         return response.content.strip()
         
     except Exception as e:
-        return f"要約生成エラー: {e}"
+        return f"詳細要約生成エラー: {e}"
 
 # extract_key_sections と text_to_documents_improved 関数は前回と同じものを使用
 
@@ -269,7 +374,7 @@ def text_to_documents_improved(text: str, key_sections: dict) -> list[Document]:
 
 # 既存関数の置き換え
 def summarize_text(text: str) -> str:
-    """メイン要約関数"""
+    """メイン要約関数(詳細版)"""
     return summarize_text_fixed(text)
 
 def summarize_pdf(pdf_path: str) -> str:
