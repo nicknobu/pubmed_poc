@@ -603,7 +603,171 @@ if st.button("🔍 RAG取得内容を確認"):
                 import traceback
                 st.error(f"デバッグ処理でエラー: {e}")
                 st.text(traceback.format_exc())
-
+# 既存のデバッグコード（RAG確認）の後に追加
+if st.button("🔍 Abstract抽出デバッグ"):
+    if not input_text:
+        st.error("まず識別子またはURLを入力してください")
+    else:
+        with st.spinner("デバッグ情報を取得中..."):
+            try:
+                # コンテンツ取得
+                content_type, content = resolve_to_content(input_text)
+                
+                if not content:
+                    st.error("コンテンツの取得に失敗しました。")
+                    st.stop()
+                
+                if content_type == 'text':
+                    # デバッグ用評価実行
+                    from services.evaluation import evaluate_summary_debug
+                    
+                    st.write("### 📊 入力テキスト基本情報")
+                    st.write(f"**文字数**: {len(content):,} 文字")
+                    st.write(f"**行数**: {len(content.split(chr(10))):,} 行")
+                    
+                    # 最初の1000文字を表示
+                    st.write("### 📄 入力テキスト（最初の1000文字）")
+                    st.text_area("コンテンツ", content[:1000], height=200, disabled=True)
+                    
+                    # 行番号付きで最初の30行を表示
+                    st.write("### 📝 行別表示（最初の30行）")
+                    lines = content.split('\n')
+                    line_display = []
+                    for i, line in enumerate(lines[:30]):
+                        line_display.append(f"{i+1:2d}: {line}")
+                    st.text_area("行別内容", '\n'.join(line_display), height=300, disabled=True)
+                    
+                    # Abstract関連キーワード検索
+                    st.write("### 🔍 Abstract関連キーワード検索")
+                    keywords = ['abstract', 'background', 'methods', 'results', 'conclusion', 'keywords']
+                    keyword_lines = {}
+                    
+                    for keyword in keywords:
+                        found_lines = []
+                        for i, line in enumerate(lines):
+                            if keyword.lower() in line.lower():
+                                found_lines.append(f"行{i+1}: {line[:100]}")
+                        keyword_lines[keyword] = found_lines
+                    
+                    for keyword, found in keyword_lines.items():
+                        if found:
+                            st.write(f"**'{keyword}' 発見箇所:**")
+                            for line in found[:5]:  # 最初の5個まで
+                                st.write(f"  {line}")
+                        else:
+                            st.write(f"**'{keyword}' 発見箇所:** なし")
+                    
+                    # ダミー要約を使ってAbstract抽出をテスト
+                    dummy_summary = "テスト要約です。"
+                    
+                    st.write("### 🧪 Abstract抽出テスト")
+                    with st.spinner("Abstract抽出実行中..."):
+                        
+                        # デバッグモードで評価実行（コンソール出力をキャプチャ）
+                        import io
+                        import sys
+                        
+                        # 標準出力をキャプチャ
+                        old_stdout = sys.stdout
+                        sys.stdout = captured_output = io.StringIO()
+                        
+                        try:
+                            debug_result = evaluate_summary_debug(content, dummy_summary)
+                            
+                            # 標準出力を元に戻す
+                            sys.stdout = old_stdout
+                            debug_logs = captured_output.getvalue()
+                            
+                            # デバッグログを表示
+                            if debug_logs:
+                                st.write("**🔧 抽出処理ログ:**")
+                                st.text_area("デバッグログ", debug_logs, height=300)
+                            
+                            # 抽出結果表示
+                            if debug_result["success"]:
+                                st.success("✅ Abstract抽出成功！")
+                                
+                                # 完全なAbstractを表示
+                                if "full_abstract" in debug_result:
+                                    st.write("**📄 抽出されたAbstract（完全版）:**")
+                                    st.text_area(
+                                        "Abstract内容", 
+                                        debug_result["full_abstract"], 
+                                        height=200,
+                                        disabled=True
+                                    )
+                                    st.write(f"**文字数**: {len(debug_result['full_abstract'])} 文字")
+                                
+                                # 品質評価結果も表示
+                                st.write("**📊 品質評価結果:**")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("コサイン類似度", f"{debug_result['cosine_similarity']:.3f}")
+                                with col2:
+                                    st.metric("単語重複率", f"{debug_result['word_overlap']:.3f}")
+                                with col3:
+                                    st.metric("総合スコア", f"{debug_result['overall_score']:.3f}")
+                                
+                            else:
+                                st.error(f"❌ Abstract抽出失敗: {debug_result['error']}")
+                            
+                            # デバッグ情報詳細
+                            if debug_result.get("debug_info"):
+                                st.write("### 📈 詳細デバッグ情報")
+                                debug_info = debug_result["debug_info"]
+                                
+                                st.write(f"**総行数**: {debug_info['total_lines']}")
+                                st.write(f"**総文字数**: {debug_info['total_chars']}")
+                                
+                                sections_found = {
+                                    "Abstract": debug_info['lines_with_abstract'],
+                                    "Background": debug_info['lines_with_background'],
+                                    "Methods": debug_info['lines_with_methods'],
+                                    "Results": debug_info['lines_with_results'], 
+                                    "Conclusion": debug_info['lines_with_conclusion']
+                                }
+                                
+                                for section, line_numbers in sections_found.items():
+                                    if line_numbers:
+                                        st.write(f"**{section}キーワード発見行**: {line_numbers}")
+                                    else:
+                                        st.write(f"**{section}キーワード発見行**: なし")
+                        
+                        except Exception as eval_error:
+                            # 標準出力を元に戻す
+                            sys.stdout = old_stdout
+                            debug_logs = captured_output.getvalue()
+                            
+                            st.error(f"デバッグ実行エラー: {eval_error}")
+                            if debug_logs:
+                                st.text_area("エラー時のログ", debug_logs, height=200)
+                    
+                    # 改善提案
+                    st.write("### 💡 抽出改善のヒント")
+                    
+                    # テキスト構造の分析
+                    abstract_keyword_count = len([line for line in lines if 'abstract' in line.lower()])
+                    background_keyword_count = len([line for line in lines if 'background' in line.lower()])
+                    
+                    if abstract_keyword_count == 0 and background_keyword_count == 0:
+                        st.warning("⚠️ AbstractやBackgroundキーワードが見つかりません。XMLの構造が予想と異なる可能性があります。")
+                        st.info("💡 対策: 冒頭部分抽出ロジックの改良、または文書構造の手動確認が必要です。")
+                    
+                    elif abstract_keyword_count > 0 and background_keyword_count == 0:
+                        st.info("💡 Abstractキーワードは見つかりましたが、Background以下の構造化セクションが見つかりません。")
+                        st.info("💡 対策: 従来型Abstract抽出ロジックの改良が必要です。")
+                    
+                    elif background_keyword_count > 0:
+                        st.success("✅ 構造化Abstract（Background以下）のキーワードが見つかりました。")
+                        st.info("💡 構造化Abstract抽出ロジックの調整で改善できる可能性があります。")
+                
+                else:
+                    st.info("PDF形式のため、テキスト抽出後にデバッグ可能です")
+                    
+            except Exception as e:
+                import traceback
+                st.error(f"デバッグ処理でエラー: {e}")
+                st.text(traceback.format_exc())
 # サイドバーに統計と使用例
 with st.sidebar:
     st.header("📊 対応状況")
