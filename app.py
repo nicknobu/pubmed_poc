@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlparse
 import streamlit as st
 from services.summarize import summarize_pdf, summarize_text
 from dotenv import load_dotenv
+from services.evaluation import evaluate_summary
 load_dotenv()
 
 import openai  # 必要に応じて先頭で import
@@ -400,15 +401,121 @@ if st.button("要約"):
 
                     result = summarize_pdf(tmp_pdf_path)
                     os.unlink(tmp_pdf_path)
+                    
+                    # PDF要約では品質評価をスキップ（原文テキストが取得困難なため）
+                    st.success("📋 要約結果：")
+                    st.write(result)
+                    st.info("💡 PDF形式のため品質評価は実行されません")
                 
                 elif content_type == 'text':
                     # テキスト直接要約
                     result = summarize_text(content)
-                
-                st.success("📋 要約結果：")
-                st.write(result)
+                    
+                    st.success("📋 要約結果：")
+                    st.write(result)
+                    
+                    # 🆕 品質評価実行
+                    with st.spinner("要約品質を評価中…"):
+                        try:
+                            evaluation_result = evaluate_summary(content, result)
+                            
+                            if evaluation_result["success"]:
+                                st.markdown("---")
+                                st.subheader("📊 要約品質評価")
+                                
+                                # メイン指標表示
+                                col1, col2, col3, col4 = st.columns(4)
+                                
+                                with col1:
+                                    cosine_score = evaluation_result["cosine_similarity"]
+                                    cosine_color = "🟢" if cosine_score >= 0.8 else "🟡" if cosine_score >= 0.6 else "🔴"
+                                    st.metric(
+                                        label="コサイン類似度", 
+                                        value=f"{cosine_score:.3f}",
+                                        help="Abstract vs 要約の意味的類似度"
+                                    )
+                                    st.write(f"{cosine_color} {cosine_score:.3f}")
+                                
+                                with col2:
+                                    overlap_score = evaluation_result["word_overlap"]
+                                    overlap_color = "🟢" if overlap_score >= 0.4 else "🟡" if overlap_score >= 0.2 else "🔴"
+                                    st.metric(
+                                        label="単語重複率", 
+                                        value=f"{overlap_score:.3f}",
+                                        help="共通する重要単語の割合"
+                                    )
+                                    st.write(f"{overlap_color} {overlap_score:.3f}")
+                                
+                                with col3:
+                                    coverage_score = evaluation_result["content_coverage"]
+                                    coverage_color = "🟢" if coverage_score >= 0.5 else "🟡" if coverage_score >= 0.3 else "🔴"
+                                    st.metric(
+                                        label="重要概念カバー率", 
+                                        value=f"{coverage_score:.3f}",
+                                        help="数値データ・重要概念の包含率"
+                                    )
+                                    st.write(f"{coverage_color} {coverage_score:.3f}")
+                                
+                                with col4:
+                                    overall_score = evaluation_result["overall_score"]
+                                    overall_color = "🟢" if overall_score >= 0.8 else "🟡" if overall_score >= 0.6 else "🔴"
+                                    st.metric(
+                                        label="総合スコア", 
+                                        value=f"{overall_score:.3f}",
+                                        help="全指標の重み付き平均"
+                                    )
+                                    st.write(f"{overall_color} {overall_score:.3f}")
+                                
+                                # 合格判定
+                                st.markdown("### 🎯 品質判定")
+                                if evaluation_result["pass_threshold"]:
+                                    st.success(f"✅ **高品質要約** (類似度 {cosine_score:.3f} ≥ 0.8)")
+                                    st.success(f"🏆 品質レベル: **{evaluation_result['quality_level']}**")
+                                else:
+                                    st.warning(f"⚠️ **要改善** (類似度 {cosine_score:.3f} < 0.8)")
+                                    st.info(f"📈 品質レベル: **{evaluation_result['quality_level']}**")
+                                
+                                # 改善提案
+                                if evaluation_result["feedback"]:
+                                    st.markdown("### 💡 改善提案")
+                                    st.info(evaluation_result["feedback"])
+                                
+                                # 詳細情報（展開可能）
+                                with st.expander("🔍 評価詳細情報"):
+                                    st.markdown("**抽出されたAbstract:**")
+                                    st.text_area(
+                                        "Abstract内容", 
+                                        evaluation_result.get("abstract_text", "抽出失敗"), 
+                                        height=100,
+                                        disabled=True
+                                    )
+                                    
+                                    st.markdown("**処理された要約:**")
+                                    st.text_area(
+                                        "要約内容", 
+                                        evaluation_result.get("summary_text", result), 
+                                        height=100,
+                                        disabled=True
+                                    )
+                                    
+                                    st.markdown("**評価アルゴリズム:**")
+                                    st.markdown("""
+                                    - **コサイン類似度**: OpenAI text-embedding-3-small使用
+                                    - **単語重複率**: Jaccard係数による共通語彙計測
+                                    - **概念カバー率**: 数値データ・重要概念の保持率
+                                    - **総合スコア**: 重み付き平均 (0.6:0.25:0.15)
+                                    """)
+                            
+                            else:
+                                st.error(f"❌ 品質評価エラー: {evaluation_result['error']}")
+                                st.info("💡 品質評価なしでも要約は正常に生成されています")
+                        
+                        except Exception as eval_error:
+                            st.error(f"品質評価処理でエラーが発生: {eval_error}")
+                            st.info("💡 品質評価なしでも要約は正常に生成されています")
                 
                 # 取得方法を表示
+                st.markdown("---")
                 st.info(f"📊 取得方法: {content_type.upper()}形式")
                     
             except Exception as e:
@@ -506,6 +613,19 @@ with st.sidebar:
     
     st.success("✅ HTML/XML対応により大幅に対象拡大！")
     
+    # 🆕 品質評価情報追加
+    st.header("🎯 品質評価機能")
+    st.markdown("""
+    **自動品質評価:**
+    - Abstract vs 要約の類似度
+    - 重要単語の包含率  
+    - 数値データの保持率
+    
+    **合格基準:**
+    - コサイン類似度 ≥ 0.8
+    - 総合スコア ≥ 0.8
+    """)
+    
     st.header("🔥 推奨使用例")
     st.markdown("""
     **PMCIDで試してみる:**
@@ -514,7 +634,7 @@ with st.sidebar:
     PMC5334499   (PDF有り)
     PMC8790252   (PDF有り)
     ```
-    
+   
     """)
     
     st.header("💡 取得優先順位")
@@ -522,4 +642,17 @@ with st.sidebar:
     1. **PDF版** (最高品質)
     2. **XML版** (構造化データ)
     3. **HTML版** (フォールバック)
+    """)
+    
+    # 🆕 品質スコア説明
+    st.header("📈 品質スコア説明")
+    st.markdown("""
+    **🟢 優秀**: 0.85以上
+    **🟡 良好**: 0.75-0.84  
+    **🔴 要改善**: 0.75未満
+    
+    高品質要約の条件:
+    - 原文の意味を正確に保持
+    - 重要な数値データを包含
+    - 簡潔で読みやすい構成
     """)
